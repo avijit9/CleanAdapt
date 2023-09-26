@@ -1,0 +1,249 @@
+
+import os
+import random
+import pickle 
+import numpy as np
+import cv2
+
+import torch
+from dataset import transforms as T
+
+
+
+def load_rgb_frames(image_dir, vid, video_frames, frame_idx):
+    frames = []
+    for idx in frame_idx:
+        img = cv2.imread(os.path.join(image_dir, vid, 'frame_{:010}.jpg'.format(idx)))[:, :, [2, 1, 0]]
+        w,h,c = img.shape
+        if w < 226 or h < 226:
+            d = 226.-min(w,h)
+            sc = 1+d/min(w,h)
+            img = cv2.resize(img,dsize=(0,0),fx=sc,fy=sc)
+        img = (img/255.)*2 - 1
+        frames.append(img)
+    return np.asarray(frames, dtype=np.float32)
+
+def load_flow_frames(u_image_dir, v_image_dir, vid, video_frames, frame_idx):
+    frames = []
+    for idx in frame_idx:
+        imgx = cv2.imread(os.path.join(u_image_dir, vid, 'frame_{:010}.jpg'.format(idx)), cv2.IMREAD_GRAYSCALE)
+        imgy = cv2.imread(os.path.join(v_image_dir, vid, 'frame_{:010}.jpg'.format(idx)), cv2.IMREAD_GRAYSCALE)
+
+        w,h = imgx.shape
+        if w < 224 or h < 224:
+            d = 224.-min(w,h)
+            sc = 1+d/min(w,h)
+            imgx = cv2.resize(imgx,dsize=(0,0),fx=sc,fy=sc)
+            imgy = cv2.resize(imgy,dsize=(0,0),fx=sc,fy=sc)
+            
+        imgx = (imgx/255.)*2 - 1
+        imgy = (imgy/255.)*2 - 1
+        img = np.asarray([imgx, imgy]).transpose([1,2,0])
+        frames.append(img)
+    return np.asarray(frames, dtype=np.float32)
+
+
+
+class EpicVideoRecord(object):
+    def __init__(self, row, root_path):
+        self._data = row
+        self.root_path = root_path
+        self.video_id = row['video_id']
+        self.start_frame = row['start_frame']
+        self.stop_frame = row['stop_frame']
+        self.verb_class = row['verb_class']
+        
+    @property
+    def path(self):
+        return self.video_id
+
+    @property
+    def num_frames(self):
+        # We don't use num of frames from the split file as in some videos 
+        # number of frames differs from the text file
+        # list_of_images = [fn for fn in os.listdir(
+		# 	os.path.join(self.root_path, self._data[0])) if fn.startswith("frame")]
+        # return len(list_of_images) - 1
+        return self.stop_frame - self.start_frame + 1
+
+    @property
+    def label(self):
+        return self.verb_class
+
+    @property
+    def frames(self):
+        list_of_images = ['frame_{:010}.jpg'.format(x) \
+        for x in range(self.start_frame, self.stop_frame + 1)]
+        
+        return list_of_images
+
+class EpicKitchenDataset(object):
+    def __init__(self, args, transform, pseudo_labels = None):
+
+        self.split_path = args.split_path
+        self.load_type = args.load_type
+        self.dataset = args.dataset
+        self.data_path = args.data_path
+        self.modality = args.modality
+
+        self.num_frames = args.clip_length
+        self.sampling_rate = args.sampling_rate
+        
+        if self.load_type == 'train':
+            self.weak_transform, self.strong_transform = transform[0], transform[1]
+        else:
+            self.weak_transform, self.strong_transform = transform, transform
+
+        self.pseudo_labels_pd = pseudo_labels
+        self.selected_sample_dict = {}
+
+        self.rgb_sampling_rate = 2
+        self.flow_sampling_rate = 1
+
+        print("Loading {} dataset..".format(self.dataset))
+
+        self._parseVideos()
+
+    def _parseVideos(self):
+
+        """
+        Read all information of all videos in the particular dataset with particular modality.
+        It does not actually read the frames.
+        """
+
+        self.samples = []
+
+        self.alias_dict = {'D1': 'P08', 'D2': 'P01', 'D3': 'P22'}
+
+        
+        self.rgb_data_path = os.path.join(self.data_path, 'rgb', self.alias_dict[self.dataset])
+        self.u_flow_data_path = os.path.join(self.data_path, 'flow', 'u', self.alias_dict[self.dataset])  
+        self.v_flow_data_path = os.path.join(self.data_path, 'flow', 'v', self.alias_dict[self.dataset])  
+
+        self._updateRecord()
+        
+        self.indices = np.arange(0, len(self.video_list))
+
+        for idx, x in enumerate(self.video_list):
+            self.selected_sample_dict[idx] = 1
+
+        self._update_video_list(select_all = True)
+
+
+    def _updateRecord(self):
+        
+        print("=> Updating the records with the generated pseudo-labels..")
+        
+        if self.load_type in ["train"]:
+            full_split_file_path = os.path.join(self.split_path, "{}_{}.pkl".format(self.dataset, self.load_type))
+        elif self.load_type in ['val']:
+            full_split_file_path = os.path.join(self.split_path, "{}_{}.pkl".format(self.dataset, 'test'))
+        elif self.load_type == "generate-pseudo-label" or self.load_type == 'generate-initial-prototypes':
+            full_split_file_path = os.path.join(self.split_path, "{}_{}.pkl".format(self.dataset, 'train'))
+        else:
+            full_split_file_path = os.path.join(self.split_path, "{}_{}.pkl".format(self.dataset, 'test'))
+        
+        if self.pseudo_labels_pd is None:
+            with open(full_split_file_path, 'rb') as f:
+                self.dataset_pd = pickle.load(f)
+            self.video_list = [EpicVideoRecord(row, self.rgb_data_path) for _, row in self.dataset_pd.iterrows()]
+            self.dummy_list = [EpicVideoRecord(row, self.rgb_data_path) for _, row in self.dataset_pd.iterrows()]
+        else:
+            self.video_list = [EpicVideoRecord(row, self.rgb_data_path) for _, row in self.pseudo_labels_pd.iterrows()]
+        
+        # self._update_video_list(select_all = True)
+    
+    def _frameSampler(self, video_info):
+
+        """
+        Samples the frames from a video. Takes total number of frames as an input and
+        returns the selected sequence of frames. We mimic MM-SADA here.
+        """
+        seq_idx = []
+
+        num_sample_frame = self.num_frames
+        half_sample_frame = num_sample_frame // 2
+        step = 2
+        segment_start = int(video_info['start_frame']) + (step * half_sample_frame)
+        segment_end = int(video_info['stop_frame']) + 1 - (step * half_sample_frame)
+
+        if segment_start >= segment_end:
+            segment_start = int(video_info['start_frame'])
+            segment_end = int(video_info['stop_frame'])
+        if segment_start <= half_sample_frame * step + 1:
+            segment_start = half_sample_frame * step + 2
+
+        center_frame_rgb = center_frame_flow = random.randint(segment_start, segment_end)
+
+
+        for i in range(center_frame_rgb - (step * half_sample_frame), \
+            center_frame_rgb + (step * half_sample_frame), step):
+            seq_idx.append(i)
+
+        return seq_idx
+
+
+    def _singleSampler(self, total):
+        seq1 = self._frameSampler(total)
+        return seq1
+
+    def __len__(self):
+        return len(self.selected_video_list)
+
+    def _update_video_list(self, select_all = True, mode = 'rgb'):
+        '''
+        Update the list of videos based on the small-loss trick
+        '''
+        self.selected_video_list = []        
+        for idx, x in enumerate(self.video_list):
+            if not select_all:
+                # due to last batch drop in the dataloader, 
+                # some videos may not be present
+                if str(idx) in list(self.selected_sample_dict.keys()):
+                    if self.selected_sample_dict[str(idx)] == 1:
+                        self.selected_video_list.append(x)
+                else:
+                    continue
+            else:
+                self.selected_video_list.append(x)
+        
+    def _update_pseudo_labels(self, pseudo_label_dict):
+        print("Updating the pseudo label dict")
+        # self.pseudo_labels = pseudo_label_dict.copy()
+        for idx, x in enumerate(self.video_list):
+            x._data['pseudo_labels'] = pseudo_label_dict[str(idx)]
+        
+    def __getitem__(self, idx):
+        
+        video = self.selected_video_list[idx]
+    
+        
+        video_length, video_label, video_frames = \
+            video.num_frames, video.label, video.frames
+
+        video_name = video._data['video_id']
+        
+        frame_idx = self._singleSampler(video._data)
+        
+        
+        rgb_seq = load_rgb_frames(self.rgb_data_path, video.path, video_frames, frame_idx)
+        flow_seq = load_flow_frames(self.u_flow_data_path, self.v_flow_data_path, video.path, video_frames, map(lambda x: x//2, frame_idx))
+        
+        weak_flow_seq = self.weak_transform(flow_seq)
+        flow_seq_padded = np.concatenate((flow_seq, np.zeros((flow_seq.shape[:-1] + (1, )))), axis = 3)
+        strong_flow_seq = self.strong_transform(torch.from_numpy(flow_seq_padded.transpose(0, 3, 1, 2)))[:, :, :, :-1]
+        
+        weak_rgb_seq = self.weak_transform(rgb_seq)
+        strong_rgb_seq = self.strong_transform(torch.from_numpy(rgb_seq.transpose(0, 3, 1, 2)))
+        
+        
+        if self.pseudo_labels_pd is not None:
+            pseudo_label = video._data['pseudo_labels']
+            return [T.video_to_tensor(weak_rgb_seq), T.video_to_tensor(weak_flow_seq)], \
+                [strong_rgb_seq.permute([3,0,1,2]), strong_flow_seq.permute([3,0,1,2])], \
+                torch.from_numpy(np.array(pseudo_label).astype(int)), \
+                torch.from_numpy(np.array(video_label)), str(idx)
+    
+                    
+        return [T.video_to_tensor(weak_rgb_seq), T.video_to_tensor(weak_flow_seq)], \
+            torch.from_numpy(np.array(video_label)), str(idx)
