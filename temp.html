@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My HTML Page</title>
+</head>
+<body>
+    <h1>My Research Paper</h1>
+    <p>This is a great paper that you should definitely cite:</p>
+    <p><a href="#" id="copyCitation">Copy Citation</a></p>
+    <pre id="bibtex">
+@article{your-paper-citation,
+  title={Overcoming Label Noise for Source-free Unsupervised Video Domain Adaptation},
+  author={Your Name and Co-authors},
+  journal={Journal or Conference Name},
+  year={Year},
+}
+    </pre>
+
+    <script>
+        // Function to copy the BibTeX citation to the clipboard
+        document.getElementById("copyCitation").addEventListener("click", function() {
+            const bibtex = document.getElementById("bibtex");
+            const textArea = document.createElement("textarea");
+            textArea.value = bibtex.textContent;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand("copy");
+            document.body.removeChild(textArea);
+            alert("BibTeX citation copied to clipboard!");
+        });
+    </script>
+</body>
+</html>
