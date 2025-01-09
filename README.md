@@ -62,8 +62,8 @@ Please consider citing the following work if you make use of this repository:
 @inproceedings{dasgupta2024source,
   title={Source-free Video Domain Adaptation by Learning from Noisy Labels},
   author={Dasgupta, Avijit and Jawahar, CV and Alahari, Karteek},
-  booktitle={Arxiv},
-  year={2024}
+  booktitle={Pattern Recognition},
+  year={2025}
 
 @inproceedings{dasgupta2022overcoming,
   title={Overcoming Label Noise for Source-free Unsupervised Video Domain Adaptation},
