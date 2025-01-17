@@ -1,7 +1,7 @@
 # Source-free Video Domain Adaptation by Learning from Noisy Labels
 
 This is the official code repository for "Source-free Video Domain Adaptation by
-Learning from Noisy Labels", Arxiv'24. An initial version of this work is published at ICVGIP'22.
+Learning from Noisy Labels", Pattern Recognition, 2025. An initial version of this work is published at ICVGIP'22 which won the Best-Paper Runner Up Award.
 
 
 ## Requirements
